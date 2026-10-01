@@ -71,3 +71,6 @@ known_hosts
 *.p12
 *.pfx
 *.token
+
+# browser regression harness dependencies (npm install in tests/browser)
+tests/browser/node_modules/

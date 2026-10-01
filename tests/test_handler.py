@@ -1,4 +1,5 @@
 import io
+import json
 import unittest
 import paramiko
 
@@ -316,6 +317,62 @@ class TestWsockHandler(unittest.TestCase):
         obj.worker_ref = ref
         WsockHandler.on_message(obj, b'{"data": "somestuff"}')
         obj.close.assert_called_with(reason='Worker closed')
+
+    def test_terminal_data_is_encoded_before_queueing(self):
+        request = HTTPServerRequest(uri='/')
+        obj = Mock(spec=WsockHandler, request=request)
+        obj.src_addr = ("127.0.0.1", 8888)
+
+        worker = Mock()
+        worker.closed = False
+        worker.encoding = 'utf-8'
+        worker.data_to_dst = []
+
+        class FakeWeakRef:
+            def __call__(self):
+                return worker
+
+        obj.worker_ref = FakeWeakRef()
+        WsockHandler.on_message(obj, json.dumps({'data': u'你A'}))
+        self.assertEqual(worker.data_to_dst, [u'你A'.encode('utf-8')])
+        worker.on_write.assert_called_with()
+
+    def test_terminal_data_respects_worker_encoding(self):
+        request = HTTPServerRequest(uri='/')
+        obj = Mock(spec=WsockHandler, request=request)
+        obj.src_addr = ("127.0.0.1", 8888)
+
+        worker = Mock()
+        worker.closed = False
+        worker.encoding = 'gbk'
+        worker.data_to_dst = []
+
+        class FakeWeakRef:
+            def __call__(self):
+                return worker
+
+        obj.worker_ref = FakeWeakRef()
+        WsockHandler.on_message(obj, json.dumps({'data': u'你A'}))
+        self.assertEqual(worker.data_to_dst, [u'你A'.encode('gbk')])
+        worker.on_write.assert_called_with()
+
+    def test_resize_message_does_not_queue_data(self):
+        request = HTTPServerRequest(uri='/')
+        obj = Mock(spec=WsockHandler, request=request)
+        obj.src_addr = ("127.0.0.1", 8888)
+
+        worker = Mock()
+        worker.closed = False
+        worker.data_to_dst = []
+
+        class FakeWeakRef:
+            def __call__(self):
+                return worker
+
+        obj.worker_ref = FakeWeakRef()
+        WsockHandler.on_message(obj, json.dumps({'resize': [80, 24]}))
+        worker.chan.resize_pty.assert_called_with(80, 24)
+        self.assertEqual(worker.data_to_dst, [])
 
 class TestIndexHandler(unittest.TestCase):
     def test_null_in_encoding(self):

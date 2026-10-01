@@ -254,7 +254,7 @@ jQuery(function($){
   }
 
 
-  function read_as_text_with_decoder(file, callback, decoder) {
+  function read_as_text_with_decoder(file, callback, decoder, stream) {
     var reader = new window.FileReader();
 
     if (decoder === undefined) {
@@ -264,7 +264,11 @@ jQuery(function($){
     reader.onload = function() {
       var text;
       try {
-        text = decoder.decode(reader.result);
+        // Terminal output is a continuous byte stream: SSH reads and
+        // websocket frames can split a multibyte character across messages.
+        // With stream: true the decoder keeps the dangling bytes until the
+        // rest of the character arrives instead of replacing them.
+        text = decoder.decode(reader.result, stream ? {'stream': true} : undefined);
       } catch (TypeError) {
         console.log('Decoding error happened.');
       } finally {
@@ -303,11 +307,11 @@ jQuery(function($){
   }
 
 
-  function read_file_as_text(file, callback, decoder) {
+  function read_file_as_text(file, callback, decoder, stream) {
     if (!window.TextDecoder) {
       read_as_text_with_encoding(file, callback, decoder);
     } else {
-      read_as_text_with_decoder(file, callback, decoder);
+      read_as_text_with_decoder(file, callback, decoder, stream);
     }
   }
 
@@ -541,7 +545,11 @@ jQuery(function($){
     };
 
     sock.onmessage = function(msg) {
-      read_file_as_text(msg.data, term_write, decoder);
+      // A single TextDecoder is kept for the lifetime of this connection and
+      // used in streaming mode so bytes of a character split across binary
+      // messages are reassembled in receive order.  It is local to this
+      // connection, so a new session starts with an empty byte buffer.
+      read_file_as_text(msg.data, term_write, decoder, true);
     };
 
     sock.onerror = function(e) {

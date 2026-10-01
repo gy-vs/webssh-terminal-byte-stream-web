@@ -1,6 +1,7 @@
 import base64
 import random
 import socket
+import time
 # import sys
 import threading
 # import traceback
@@ -37,12 +38,13 @@ class Server(paramiko.ServerInterface):
     ]
     encodings = ['UTF-8', 'GBK', 'UTF-8\r\n', 'GBK\r\n']
 
-    def __init__(self, encodings=[]):
+    def __init__(self, encodings=[], paced_echo=False):
         self.shell_event = threading.Event()
         self.exec_event = threading.Event()
         self.cmd_to_enc = self.get_cmd2enc(encodings)
         self.password_verified = False
         self.key_verified = False
+        self.paced_echo = paced_echo
 
     def get_cmd2enc(self, encodings):
         n = len(self.commands)
@@ -57,7 +59,7 @@ class Server(paramiko.ServerInterface):
 
     def check_auth_password(self, username, password):
         print('Auth attempt with username: {!r} & password: {!r}'.format(username, password)) # noqa
-        if (username in ['robey', 'bar', 'foo']) and (password == 'foo'):
+        if (username in ['robey', 'bar', 'foo', 'page']) and (password == 'foo'):
             return paramiko.AUTH_SUCCESSFUL
         return paramiko.AUTH_FAILED
 
@@ -136,7 +138,7 @@ class Server(paramiko.ServerInterface):
         return True
 
 
-def run_ssh_server(port=2200, running=True, encodings=[]):
+def run_ssh_server(port=2200, running=True, encodings=[], paced_echo=False):
     # now connect
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -150,7 +152,7 @@ def run_ssh_server(port=2200, running=True, encodings=[]):
         t = paramiko.Transport(client)
         t.load_server_moduli()
         t.add_server_key(host_key)
-        server = Server(encodings)
+        server = Server(encodings, paced_echo=paced_echo)
         try:
             t.start_server(server=server)
         except Exception as e:
@@ -184,7 +186,13 @@ def run_ssh_server(port=2200, running=True, encodings=[]):
             continue
 
         chan.send(banner_encoded)
-        if username == 'bar':
+        if username == 'page':
+            # keep the session alive without echoing; the browser page
+            # regression drives output through the (fake) client websocket
+            while not chan.exit_status_ready() and running:
+                chan.recv(32 * 1024)
+                time.sleep(0.05)
+        elif username == 'bar':
             msg = chan.recv(1024)
             chan.send(msg)
         elif username == 'foo':
@@ -198,6 +206,16 @@ def run_ssh_server(port=2200, running=True, encodings=[]):
             while data:
                 s = chan.send(data)
                 data = data[s:]
+        elif username == 'robey' and getattr(server, 'paced_echo', False):
+            # collect the full client message, then echo it one byte at a
+            # time with small delays so each byte lands in its own SSH
+            # packet; used by the short-write regression test
+            data = b''
+            while not data.endswith(b'\r\n\r\n'):
+                data += chan.recv(32 * 1024)
+            for i in range(len(data)):
+                chan.send(data[i:i + 1])
+                time.sleep(0.005)
         else:
             chan.close()
             t.close()

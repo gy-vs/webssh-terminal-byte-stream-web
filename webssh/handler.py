@@ -590,7 +590,7 @@ class WsockHandler(MixinHandler, tornado.websocket.WebSocketHandler):
 
         data = msg.get('data')
         if data and isinstance(data, UnicodeType):
-            worker.data_to_dst.append(data)
+            worker.data_to_dst.append(to_bytes(data, worker.encoding))
             worker.on_write()
 
     def on_close(self):

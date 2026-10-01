@@ -1,0 +1,12 @@
+{
+  "name": "webssh-browser-regression",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Browser-side regression tests for the WebSSH terminal page (jsdom)",
+  "scripts": {
+    "test": "node page_test.js"
+  },
+  "dependencies": {
+    "jsdom": "24.1.3"
+  }
+}

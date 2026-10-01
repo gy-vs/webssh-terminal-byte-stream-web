@@ -10,6 +10,8 @@ from tornado.ioloop import IOLoop
 from tornado.iostream import _ERRNO_CONNRESET
 from tornado.util import errno_from_exception
 
+from webssh.utils import to_bytes
+
 
 BUF_SIZE = 32 * 1024
 clients = {}  # {ip: {id: worker}}
@@ -95,7 +97,11 @@ class Worker(object):
         if not self.data_to_dst:
             return
 
-        data = ''.join(self.data_to_dst)
+        # The queue holds bytes, not text.  chan.send reports how many bytes
+        # it accepted; slicing a text string by that byte count corrupts a
+        # multibyte character when the channel accepts only part of it, so
+        # every pending chunk is encoded before it reaches the queue.
+        data = b''.join(self.data_to_dst)
         logging.debug('{!r} to {}:{}'.format(data, *self.dst_addr))
 
         try:

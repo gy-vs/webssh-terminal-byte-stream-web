@@ -517,6 +517,7 @@ class OtherTestBase(TestAppBase):
     maxconn = 20
     origin = 'same'
     encodings = []
+    paced_echo = False
     body = {
         'hostname': '127.0.0.1',
         'port': '',
@@ -546,7 +547,8 @@ class OtherTestBase(TestAppBase):
 
         t = threading.Thread(
             target=run_ssh_server,
-            args=(self.sshserver_port, self.running, self.encodings)
+            args=(self.sshserver_port, self.running, self.encodings,
+                  self.paced_echo)
         )
         t.setDaemon(True)
         t.start()
@@ -606,6 +608,71 @@ class TestAppWithLargeBuffer(OtherTestBase):
         recv = b''.join(lst).decode(data['encoding'])
         self.assertEqual(send, recv)
         ws.close()
+
+
+class TestAppWithShortChannelWrites(OtherTestBase):
+    """Regression: a short chan.send must not lose multibyte characters."""
+
+    encodings = ['UTF-8', 'UTF-8']
+    paced_echo = True
+
+    @tornado.testing.gen_test
+    def test_multibyte_data_survives_one_byte_writes(self):
+        from webssh.worker import Worker
+
+        real_set_handler = Worker.set_handler
+
+        def short_write_set_handler(self, handler):
+            # Reproduce a partial write inside the SSH layer: paramiko's
+            # channel window may accept only part of a multibyte character,
+            # so send() returns a byte count smaller than the encoded
+            # payload.  Report the byte count back to the worker but keep
+            # feeding the underlying channel the corresponding byte slice,
+            # as a real transport would.
+            real_send = self.chan.send
+
+            def send_reporting_byte_count(data):
+                if isinstance(data, bytes):
+                    sent_bytes = data[:1]
+                else:
+                    sent_bytes = data.encode(self.encoding)[:1]
+                accepted = real_send(sent_bytes)
+                return len(sent_bytes) if accepted else 0
+
+            self.chan.send = send_reporting_byte_count
+            return real_set_handler(self, handler)
+
+        Worker.set_handler = short_write_set_handler
+        try:
+            url = self.get_url('/')
+            response = yield self.async_post(url, dict(self.body,
+                                                       username='robey'))
+            data = json.loads(to_str(response.body))
+            self.assert_status_none(data)
+
+            url = url.replace('http', 'ws')
+            ws_url = url + 'ws?id=' + data['id']
+            ws = yield tornado.websocket.websocket_connect(ws_url)
+            msg = yield ws.read_message()
+            self.assertEqual(to_str(msg, data['encoding']), banner)
+
+            send = u'你A' + '\r\n\r\n'
+            yield ws.write_message(json.dumps({'data': send}))
+            lst = []
+            while True:
+                msg = yield ws.read_message()
+                lst.append(msg)
+                recv = b''.join(lst)
+                if recv.endswith(b'\r\n\r\n'):
+                    break
+            # every byte of e4 bd a0 41 must reach the remote and echo back;
+            # the old text-queue slicing left only e4 41 after a one-byte
+            # first write.
+            self.assertEqual(recv, send.encode(data['encoding']))
+            self.assertIn(b'\xe4\xbd\xa0A', recv)
+            ws.close()
+        finally:
+            Worker.set_handler = real_set_handler
 
 
 class TestAppWithRejectPolicy(OtherTestBase):
