@@ -10,6 +10,8 @@ from tornado.ioloop import IOLoop
 from tornado.iostream import _ERRNO_CONNRESET
 from tornado.util import errno_from_exception
 
+from webssh.utils import to_bytes
+
 
 BUF_SIZE = 32 * 1024
 clients = {}  # {ip: {id: worker}}
@@ -95,7 +97,10 @@ class Worker(object):
         if not self.data_to_dst:
             return
 
-        data = ''.join(self.data_to_dst)
+        # queued items are newly typed unicode strings and possibly bytes
+        # left over from a previous short write; join them as bytes, since
+        # chan.send returns the number of bytes it accepted
+        data = b''.join(to_bytes(item) for item in self.data_to_dst)
         logging.debug('{!r} to {}:{}'.format(data, *self.dst_addr))
 
         try:
@@ -108,6 +113,9 @@ class Worker(object):
                 self.update_handler(IOLoop.WRITE)
         else:
             self.data_to_dst = []
+            # requeue only the bytes this send did not accept; keeping this
+            # as bytes is what prevents a split multibyte character from
+            # losing its remaining bytes after a short write
             data = data[sent:]
             if data:
                 self.data_to_dst.append(data)

@@ -608,6 +608,61 @@ class TestAppWithLargeBuffer(OtherTestBase):
         ws.close()
 
 
+class TestAppWithShortWrite(OtherTestBase):
+
+    @tornado.testing.gen_test
+    def test_app_for_multibyte_input_with_a_one_byte_short_write(self):
+        url = self.get_url('/')
+        response = yield self.async_post(url, dict(self.body, username='foo'))
+        data = json.loads(to_str(response.body))
+        self.assert_status_none(data)
+
+        # force the real ssh channel to accept only one byte on the first
+        # send call, as if the network/channel accepted a partial write; the
+        # remaining bytes of '你' plus the following ascii must be retried
+        worker = clients['127.0.0.1'][data['id']]
+        chan = worker.chan
+        orig_send = chan.send
+        state = {'calls': 0}
+
+        def send_with_short_first_write(payload, *args, **kwargs):
+            if state['calls'] == 0:
+                state['calls'] += 1
+                # accept exactly one byte, regardless of str/bytes input
+                if not isinstance(payload, bytes):
+                    payload = payload.encode(worker.encoding)
+                payload = payload[:1]
+            return orig_send(payload, *args, **kwargs)
+
+        chan.send = send_with_short_first_write
+
+        url = url.replace('http', 'ws')
+        ws_url = url + 'ws?id=' + data['id']
+        ws = yield tornado.websocket.websocket_connect(ws_url)
+        msg = yield ws.read_message()
+        self.assertEqual(to_str(msg, data['encoding']), banner)
+
+        send = u'你A' + '\r\n\r\n'
+        yield ws.write_message(json.dumps({'data': send}))
+        lst = []
+        while True:
+            msg = yield ws.read_message()
+            lst.append(msg)
+            if msg.endswith(b'\r\n\r\n'):
+                break
+        recv = b''.join(lst)
+        self.assertEqual(
+            recv, u'你A'.encode('utf-8') + b'\r\n\r\n'
+        )
+        self.assertEqual(
+            recv.hex(),
+            (u'你A'.encode('utf-8') + b'\r\n\r\n').hex()
+        )
+        self.assertEqual(worker.data_to_dst, [])
+        ws.close()
+
+
+
 class TestAppWithRejectPolicy(OtherTestBase):
 
     policy = 'reject'

@@ -254,7 +254,7 @@ jQuery(function($){
   }
 
 
-  function read_as_text_with_decoder(file, callback, decoder) {
+  function read_as_text_with_decoder(file, callback, decoder, stream) {
     var reader = new window.FileReader();
 
     if (decoder === undefined) {
@@ -264,7 +264,11 @@ jQuery(function($){
     reader.onload = function() {
       var text;
       try {
-        text = decoder.decode(reader.result);
+        // stream: true keeps an unfinished multibyte sequence buffered so
+        // that bytes of one remote character arriving in separate
+        // websocket messages are reassembled instead of each turning into
+        // replacement characters.
+        text = decoder.decode(reader.result, {'stream': !!stream});
       } catch (TypeError) {
         console.log('Decoding error happened.');
       } finally {
@@ -303,11 +307,11 @@ jQuery(function($){
   }
 
 
-  function read_file_as_text(file, callback, decoder) {
+  function read_file_as_text(file, callback, decoder, stream) {
     if (!window.TextDecoder) {
       read_as_text_with_encoding(file, callback, decoder);
     } else {
-      read_as_text_with_decoder(file, callback, decoder);
+      read_as_text_with_decoder(file, callback, decoder, stream);
     }
   }
 
@@ -541,7 +545,9 @@ jQuery(function($){
     };
 
     sock.onmessage = function(msg) {
-      read_file_as_text(msg.data, term_write, decoder);
+      // stream the bytes: a character may span multiple websocket
+      // messages, and the decoder is recreated for every new connection
+      read_file_as_text(msg.data, term_write, decoder, true);
     };
 
     sock.onerror = function(e) {
